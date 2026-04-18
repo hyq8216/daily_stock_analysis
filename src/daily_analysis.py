@@ -16,6 +16,9 @@ from datetime import datetime, timedelta
 import json
 import os
 import sys
+import time
+import random
+from requests.exceptions import RequestException
 
 # 添加路径
 sys.path.insert(0, os.path.dirname(__file__))
@@ -37,6 +40,23 @@ class DailyStockAnalyzer:
         self.fetcher = DataFetcher(tushare_token) if DataFetcher else None
         self.sentiment = SentimentAnalyzer() if SentimentAnalyzer else None
         self.results = []
+        self.request_delay = 0.2  # 每次请求延迟 0.2 秒
+        self.max_retries = 2  # 最大重试次数
+    
+    def safe_api_call(self, func, *args, **kwargs):
+        """带重试和延迟的安全 API 调用"""
+        for attempt in range(self.max_retries):
+            try:
+                # 添加随机延迟，避免被限流
+                time.sleep(self.request_delay + random.uniform(0, 0.1))
+                result = func(*args, **kwargs)
+                return result
+            except (RequestException, ConnectionError, Exception) as e:
+                if attempt < self.max_retries - 1:
+                    time.sleep(1 * (attempt + 1))  # 指数退避
+                    continue
+                return None
+        return None
     
     def get_stock_list(self, market='all'):
         """获取股票列表"""
@@ -93,8 +113,8 @@ class DailyStockAnalyzer:
     def analyze_single_stock(self, code, name):
         """分析单只股票"""
         try:
-            # 获取历史数据
-            df = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq")
+            # 使用安全 API 调用
+            df = self.safe_api_call(ak.stock_zh_a_hist, symbol=code, period="daily", adjust="qfq")
             if df is None or len(df) < 10:
                 return None
             
@@ -139,9 +159,14 @@ class DailyStockAnalyzer:
             print(f"分析 {code} 失败：{e}")
             return None
     
-    def run_daily_analysis(self, market='all', top_n=20):
+    def run_daily_analysis(self, market='all', top_n=20, max_stocks=None):
         """
         执行每日分析
+        
+        Args:
+            market: 市场范围 ('all', 'kcb', 'cyb')
+            top_n: 返回前 N 只股票
+            max_stocks: 最多分析多少只股票（用于测试）
         """
         print("="*60)
         print(f"每日股票分析 - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
@@ -154,22 +179,32 @@ class DailyStockAnalyzer:
             print("未找到股票数据")
             return []
         
+        # 限制分析数量（用于测试）
+        if max_stocks and max_stocks < len(stock_list):
+            stock_list = stock_list.head(max_stocks)
+            print(f"限制分析数量：{max_stocks} 只股票")
+        
         # 分析每只股票
-        print("\n开始分析股票...")
+        print(f"\n开始分析 {len(stock_list)} 只股票...")
         results = []
+        success_count = 0
+        fail_count = 0
         
         for i, row in stock_list.iterrows():
+            # 每 50 只打印一次进度
             if i % 50 == 0:
-                print(f"进度：{i}/{len(stock_list)}")
+                print(f"进度：{i}/{len(stock_list)} | 成功：{success_count} | 失败：{fail_count}")
             
             result = self.analyze_single_stock(row['代码'], row['名称'])
             if result:
                 results.append(result)
+                success_count += 1
                 print(f"✓ {row['代码']} {row['名称']} - 连续{result['consecutive_days']}天小阳线")
-            
-            # 避免请求过快
-            import time
-            time.sleep(0.3)
+            else:
+                fail_count += 1
+        
+        # 最终统计
+        print(f"\n分析完成：成功 {success_count} | 失败 {fail_count} | 成功率 {success_count/len(stock_list)*100:.1f}%")
         
         # 排序
         results = sorted(results, key=lambda x: x['consecutive_days'], reverse=True)
@@ -177,7 +212,7 @@ class DailyStockAnalyzer:
         
         self.results = results
         
-        print(f"\n找到 {len(results)} 只符合条件的股票")
+        print(f"找到 {len(results)} 只符合条件的股票")
         
         return results
     
@@ -307,8 +342,16 @@ def main():
     # 初始化分析器
     analyzer = DailyStockAnalyzer()
     
+    # 获取参数（环境变量）
+    max_stocks = os.environ.get('MAX_STOCKS')
+    if max_stocks:
+        max_stocks = int(max_stocks)
+        print(f"测试模式：限制分析 {max_stocks} 只股票")
+    else:
+        max_stocks = None
+    
     # 执行分析
-    results = analyzer.run_daily_analysis(market='all', top_n=20)
+    results = analyzer.run_daily_analysis(market='all', top_n=20, max_stocks=max_stocks)
     
     if len(results) > 0:
         # 保存结果
