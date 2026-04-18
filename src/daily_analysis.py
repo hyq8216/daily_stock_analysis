@@ -23,12 +23,18 @@ from requests.exceptions import RequestException
 # 添加路径
 sys.path.insert(0, os.path.dirname(__file__))
 
+# 添加工作空间路径（用于导入 quant_trading）
+workspace_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if workspace_path not in sys.path:
+    sys.path.insert(0, workspace_path)
+
 # 尝试导入量化框架
 try:
     from quant_trading.data.data_fetcher import DataFetcher
     from quant_trading.models.sentiment_analysis import SentimentAnalyzer
-except ImportError:
-    print("量化框架未安装，使用基础分析模式")
+    print("✅ 量化框架加载成功")
+except ImportError as e:
+    print(f"⚠️ 量化框架未安装，使用基础分析模式 ({e})")
     DataFetcher = None
     SentimentAnalyzer = None
 
