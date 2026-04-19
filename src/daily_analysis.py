@@ -314,8 +314,8 @@ def main():
     analyzer = DailyStockAnalyzer()
     
     # 获取参数
-    max_stocks = os.environ.get('MAX_STOCKS')
-    test_mode = os.environ.get('TEST_MODE')
+    max_stocks = int(os.environ.get('MAX_STOCKS', '50'))
+    test_mode = os.environ.get('TEST_MODE', 'false') == 'true'
     
     if max_stocks:
         max_stocks = int(max_stocks)
