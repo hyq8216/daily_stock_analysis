@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-每日股票分析脚本 - 灵活版
+每日股票分析脚本 - 多数据源版
 功能：
-1. 筛选连续小阳线股票（放宽条件）
+1. 筛选连续小阳线股票
 2. 技术面分析
 3. 情感分析（新闻/股吧）
 4. 生成分析报告
@@ -11,7 +11,6 @@
 
 import pandas as pd
 import numpy as np
-import akshare as ak
 from datetime import datetime, timedelta
 import json
 import os
@@ -19,7 +18,8 @@ import sys
 import time
 import random
 import logging
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Callable
+import requests
 
 # 设置项目路径
 project_path = os.path.join(os.path.dirname(__file__), '..')
@@ -38,17 +38,119 @@ except ImportError as e:
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+class MultiSourceDataFetcher:
+    """多数据源获取器"""
+    
+    def __init__(self, tushare_token=None):
+        self.tushare_token = tushare_token
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+    
+    def get_stock_data_akshare(self, symbol: str, period: str = "daily", adjust: str = "qfq"):
+        """使用akshare获取股票数据"""
+        try:
+            import akshare as ak
+            df = ak.stock_zh_a_hist(symbol=symbol, period=period, adjust=adjust)
+            return df
+        except Exception as e:
+            print(f"  akshare获取失败: {e}")
+            return None
+    
+    def get_stock_data_tushare(self, symbol: str):
+        """使用tushare获取股票数据"""
+        if not self.tushare_token:
+            print("  TuShare token未配置，跳过")
+            return None
+        
+        try:
+            import tushare as ts
+            ts.set_token(self.tushare_token)
+            pro = ts.pro_api()
+            
+            # 转换代码格式 (TuShare格式)
+            ts_code = symbol
+            if symbol.startswith('6'):
+                ts_code = f"{symbol}.SH"
+            elif symbol.startswith(('0', '3')):
+                ts_code = f"{symbol}.SZ"
+            
+            df = pro.daily(ts_code=ts_code, start_date=(datetime.now() - timedelta(days=30)).strftime('%Y%m%d'))
+            return df
+        except Exception as e:
+            print(f"  TuShare获取失败: {e}")
+            return None
+    
+    def get_stock_data_sina(self, symbol: str):
+        """使用新浪接口获取股票数据"""
+        try:
+            # 新浪财经接口
+            sina_url = f"http://vip.stock.finance.sina.com.cn/corp/go.php/vMS_MarketHistory/stockid/{symbol}.phtml"
+            # 或者使用更简单的接口
+            if symbol.startswith('6'):
+                sina_symbol = f"sh{symbol}"
+            else:
+                sina_symbol = f"sz{symbol}"
+            
+            url = f"https://hq.sinajs.cn/list={sina_symbol}"
+            response = self.session.get(url, timeout=10)
+            if response.status_code == 200:
+                # 这里需要解析返回的数据，简化处理
+                # 实际上新浪接口格式复杂，可能需要专门处理
+                pass
+        except Exception as e:
+            print(f"  新浪获取失败: {e}")
+            return None
+        
+        # 使用另一种免费接口
+        try:
+            # 聚宽精简版接口（公开接口）
+            jq_url = f"https://jfds-1252956699.cos.ap-shanghai.myqcloud.com/jqka/backtest_data/stock/{symbol}.csv"
+            df = pd.read_csv(jq_url)
+            return df
+        except:
+            print("  聚宽数据获取失败")
+            return None
+    
+    def get_stock_data(self, symbol: str, source_priority: List[str] = None):
+        """按优先级获取股票数据"""
+        if source_priority is None:
+            source_priority = ['akshare', 'tushare', 'sina']
+        
+        for source in source_priority:
+            if source == 'akshare':
+                df = self.get_stock_data_akshare(symbol)
+            elif source == 'tushare':
+                df = self.get_stock_data_tushare(symbol)
+            elif source == 'sina':
+                df = self.get_stock_data_sina(symbol)
+            else:
+                df = None
+            
+            if df is not None and len(df) > 0:
+                print(f"  ✅ 使用 {source} 获取数据成功 ({len(df)} 条记录)")
+                return df
+        
+        print(f"  ❌ 所有数据源都失败")
+        return None
+
 class DailyStockAnalyzer:
     """每日股票分析器"""
     
     def __init__(self, tushare_token=None):
-        self.fetcher = DataFetcher(tushare_token) if DataFetcher else None
-        self.sentiment = SentimentAnalyzer() if SentimentAnalyzer else None
+        self.data_fetcher = MultiSourceDataFetcher(tushare_token)
+        try:
+            from quant_framework.models.sentiment_analysis import SentimentAnalyzer
+            self.sentiment = SentimentAnalyzer() if SentimentAnalyzer else None
+            print("✅ 量化框架加载成功")
+        except ImportError:
+            print(f"⚠️ transformers 库未安装，情感分析功能不可用")
+            self.sentiment = None
         self.results = []
         # 优化参数
-        self.request_delay = 0.3  # 适中的延迟
+        self.request_delay = 0.2  # 减少延迟以提高效率
         self.max_retries = 2  # 适度的重试次数
-        print(f"⚠️ transformers 库未安装，情感分析功能不可用")
     
     def safe_api_call(self, func, *args, **kwargs):
         """带重试和延迟的安全 API 调用"""
@@ -74,16 +176,30 @@ class DailyStockAnalyzer:
         
         # 确保数值列为数值类型
         df = df.copy()
-        numeric_cols = ['开盘', '收盘', '最高', '最低']
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+        # 根据不同数据源的列名进行适配
+        price_cols = {
+            '收盘': ['收盘', 'close', '收盘价', 'close_price'],
+            '开盘': ['开盘', 'open', '开盘价', 'open_price'],
+            '最高': ['最高', 'high', '最高价', 'high_price'],
+            '最低': ['最低', 'low', '最低价', 'low_price']
+        }
+        
+        # 尝试找到对应的列名
+        close_col = next((col for col in price_cols['收盘'] if col in df.columns), None)
+        open_col = next((col for col in price_cols['开盘'] if col in df.columns), None)
+        
+        if not close_col or not open_col:
+            print(f"    无法找到价格列: close={close_col}, open={open_col}")
+            return False, 0
+        
+        for col in [close_col, open_col]:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
         
         # 检查是否为阳线（涨幅为正但不大）
         df['small_yang'] = (
-            (df['收盘'] > df['开盘']) &  # 阳线
-            ((df['收盘'] - df['开盘']) / df['开盘'] <= max_change_pct/100) &  # 涨幅<=5%
-            ((df['收盘'] - df['开盘']) / df['开盘'] > 0)  # 涨幅>0
+            (df[close_col] > df[open_col]) &  # 阳线
+            ((df[close_col] - df[open_col]) / df[open_col] <= max_change_pct/100) &  # 涨幅<=5%
+            ((df[close_col] - df[open_col]) / df[open_col] > 0)  # 涨幅>0
         )
         
         consecutive = df['small_yang'].rolling(min_days).sum().iloc[-1]
@@ -92,71 +208,86 @@ class DailyStockAnalyzer:
     
     def analyze_single_stock(self, code, name):
         """分析单只股票"""
-        try:
-            df = self.safe_api_call(ak.stock_zh_a_hist, symbol=code, period="daily", adjust="qfq")
-            if df is None or len(df) < 10:
-                return None
-            
-            recent = df.head(10)
-            
-            # 使用更灵活的条件：连续2天，涨幅<=5%
-            is_pattern, consecutive_days = self.check_small_yang_pattern(recent, min_days=2, max_change_pct=5.0)
-            
-            if not is_pattern:
-                return None
-            
-            latest = recent.iloc[0]
-            ma5 = recent['收盘'].head(5).mean()
-            ma10 = recent['收盘'].mean()
-            
-            sentiment_score = 0.5
-            if self.sentiment:
-                try:
-                    sentiment_result = self.sentiment.get_sentiment_signal(code)
-                    if sentiment_result:
-                        sentiment_score = sentiment_result.get('confidence', 0.5)
-                except:
-                    pass
-            
-            return {
-                'code': code,
-                'name': name,
-                'consecutive_days': consecutive_days,
-                'latest_price': latest['收盘'],
-                'change_pct': latest['涨跌幅'] if '涨跌幅' in latest else 0,
-                'ma5': round(ma5, 2),
-                'ma10': round(ma10, 2),
-                'price_ma5_ratio': round(latest['收盘'] / ma5, 3),
-                'sentiment_score': round(sentiment_score, 2),
-                'volume': latest['成交量'] if '成交量' in latest else 0,
-                'analysis_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-            
-        except Exception:
+        print(f"  分析 {code} - {name}...")
+        
+        # 使用多数据源获取数据
+        df = self.data_fetcher.get_stock_data(code)
+        if df is None or len(df) < 10:
+            print(f"    数据获取失败或不足")
             return None
+        
+        recent = df.head(10)
+        
+        # 使用更灵活的条件：连续2天，涨幅<=5%
+        is_pattern, consecutive_days = self.check_small_yang_pattern(recent, min_days=2, max_change_pct=5.0)
+        
+        if not is_pattern:
+            print(f"    不符合小阳线模式 (连续 {consecutive_days} 天)")
+            return None
+        
+        print(f"    ✅ 符合小阳线模式 (连续 {consecutive_days} 天)")
+        
+        # 根据数据源的列名获取价格
+        close_col = next((col for col in ['收盘', 'close', '收盘价', 'close_price'] if col in recent.columns), '收盘')
+        pct_change_col = next((col for col in ['涨跌幅', 'pct_change', 'change_pct'] if col in recent.columns), '涨跌幅')
+        
+        latest = recent.iloc[0]
+        ma5 = recent[close_col].head(5).mean()
+        ma10 = recent[close_col].mean()
+        
+        sentiment_score = 0.5
+        if self.sentiment:
+            try:
+                sentiment_result = self.sentiment.get_sentiment_signal(code)
+                if sentiment_result:
+                    sentiment_score = sentiment_result.get('confidence', 0.5)
+            except:
+                pass
+        
+        result = {
+            'code': code,
+            'name': name,
+            'consecutive_days': consecutive_days,
+            'latest_price': latest[close_col],
+            'change_pct': latest[pct_change_col] if pct_change_col in latest else 0,
+            'ma5': round(ma5, 2),
+            'ma10': round(ma10, 2),
+            'price_ma5_ratio': round(latest[close_col] / ma5, 3),
+            'sentiment_score': round(sentiment_score, 2),
+            'volume': latest.get('成交量', latest.get('vol', latest.get('volume', 0))),
+            'analysis_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        print(f"    ✅ 分析完成: {result['name']} ({result['consecutive_days']} 天小阳线)")
+        return result
     
     def get_stock_list(self, market='all'):
-        """获取股票列表"""
+        """获取股票列表 - 使用多个数据源"""
         print(f"获取 {market} 股票列表...")
         
+        all_stocks = []
+        
         try:
+            # 尝试使用akshare获取
+            import akshare as ak
+            
             if market == 'kcb' or market == 'all':
                 try:
                     kcb = ak.stock_sh_a_spot_em()
                     kcb = kcb[kcb['代码'].str.startswith('688')]
-                except:
-                    kcb = pd.DataFrame()
-            else:
-                kcb = pd.DataFrame()
-                
+                    print(f"  科创板: {len(kcb)} 只")
+                    all_stocks.extend([(row['代码'], row['名称']) for _, row in kcb.iterrows()])
+                except Exception as e:
+                    print(f"  科创板获取失败: {e}")
+            
             if market == 'cyb' or market == 'all':
                 try:
                     cyb = ak.stock_sz_a_spot_em()
                     cyb = cyb[cyb['代码'].str.startswith('300')]
-                except:
-                    cyb = pd.DataFrame()
-            else:
-                cyb = pd.DataFrame()
+                    print(f"  创业板: {len(cyb)} 只")
+                    all_stocks.extend([(row['代码'], row['名称']) for _, row in cyb.iterrows()])
+                except Exception as e:
+                    print(f"  创业板获取失败: {e}")
             
             if market == 'all':
                 try:
@@ -165,34 +296,16 @@ class DailyStockAnalyzer:
                     main_board = zxb[
                         ~(zxb['代码'].str.startswith(('000', '001', '002', '300', '688', '689')))
                     ]
-                except:
-                    main_board = pd.DataFrame()
-            else:
-                main_board = pd.DataFrame()
-            
-            # 合并所有股票
-            all_stocks = pd.concat([kcb, cyb, main_board], ignore_index=True)
-            
-            # 只选择必要的列并过滤
-            if '代码' in all_stocks.columns and '名称' in all_stocks.columns:
-                all_stocks = all_stocks[['代码', '名称']].dropna()
-            elif 'symbol' in all_stocks.columns and 'name' in all_stocks.columns:
-                all_stocks = all_stocks.rename(columns={'symbol': '代码', 'name': '名称'})[['代码', '名称']].dropna()
-            else:
-                # 如果没有预期的列名，尝试其他常见列名
-                code_col = next((col for col in all_stocks.columns if '代码' in col or 'code' in col.lower()), None)
-                name_col = next((col for col in all_stocks.columns if '名称' in col or 'name' in col.lower() or '简称' in col), None)
-                if code_col and name_col:
-                    all_stocks = all_stocks[[code_col, name_col]].rename(columns={code_col: '代码', name_col: '名称'}).dropna()
-                else:
-                    return []
-            
-            print(f"共找到 {len(all_stocks)} 只股票")
-            return [(row['代码'], row['名称']) for _, row in all_stocks.iterrows()]
+                    print(f"  主板: {len(main_board)} 只")
+                    all_stocks.extend([(row['代码'], row['名称']) for _, row in main_board.iterrows()])
+                except Exception as e:
+                    print(f"  主板获取失败: {e}")
         
-        except Exception as e:
-            print(f"获取股票列表失败: {e}")
-            return []
+        except ImportError:
+            print("  akshare未安装，无法获取股票列表")
+        
+        print(f"共找到 {len(all_stocks)} 只股票")
+        return all_stocks
     
     def run_daily_analysis(self, market='all', top_n=20, max_stocks=None):
         """运行每日分析"""
@@ -218,6 +331,7 @@ class DailyStockAnalyzer:
         fail_count = 0
         
         for i, (code, name) in enumerate(stock_list):
+            print(f"[{i+1}/{len(stock_list)}] ", end="")
             result = self.analyze_single_stock(code, name)
             
             if result:
@@ -228,7 +342,7 @@ class DailyStockAnalyzer:
             
             # 显示进度
             if (i + 1) % 10 == 0 or i == len(stock_list) - 1:
-                print(f"进度：{i+1}/{len(stock_list)} | 成功：{success_count} | 失败：{fail_count}")
+                print(f"\n进度：{i+1}/{len(stock_list)} | 成功：{success_count} | 失败：{fail_count}")
         
         print(f"\n分析完成：成功 {success_count} | 失败 {fail_count} | 成功率 {success_count/(success_count+fail_count)*100:.1f}%")
         print(f"找到 {len(self.results)} 只符合条件的股票")
@@ -317,7 +431,9 @@ def main():
     """主函数"""
     print("启动每日股票分析...\n")
     
-    analyzer = DailyStockAnalyzer()
+    # 尝试从环境变量获取TuShare token
+    tushare_token = os.environ.get('TUSHARE_TOKEN')
+    analyzer = DailyStockAnalyzer(tushare_token=tushare_token)
     
     # 获取参数
     max_stocks = int(os.environ.get('MAX_STOCKS', '50'))
