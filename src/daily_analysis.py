@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 """
-每日股票分析脚本
-功能：
-1. 筛选连续小阳线股票
-2. 技术面分析
-3. 情感分析（新闻/股吧）
-4. 生成分析报告
-5. 推送到 Notion
+每日股票分析脚本（优化版）
 """
 
 import pandas as pd
@@ -20,10 +14,7 @@ import time
 import random
 from requests.exceptions import RequestException
 
-# 添加路径
-sys.path.insert(0, os.path.dirname(__file__))
-
-# 添加项目路径（用于导入 quant_framework）
+# 添加项目路径
 project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
@@ -46,20 +37,19 @@ class DailyStockAnalyzer:
         self.fetcher = DataFetcher(tushare_token) if DataFetcher else None
         self.sentiment = SentimentAnalyzer() if SentimentAnalyzer else None
         self.results = []
-        self.request_delay = 0.5  # 每次请求延迟 0.5 秒（优化）
-        self.max_retries = 1  # 最大重试次数（优化）
+        self.request_delay = 0.5  # 优化：增加延迟
+        self.max_retries = 1  # 优化：减少重试
     
     def safe_api_call(self, func, *args, **kwargs):
-        """带重试和延迟的安全 API 调用"""
+        """安全 API 调用"""
         for attempt in range(self.max_retries):
             try:
-                # 添加随机延迟，避免被限流
                 time.sleep(self.request_delay + random.uniform(0, 0.1))
                 result = func(*args, **kwargs)
                 return result
-            except (RequestException, ConnectionError, Exception) as e:
+            except Exception as e:
                 if attempt < self.max_retries - 1:
-                    time.sleep(1 * (attempt + 1))  # 指数退避
+                    time.sleep(1 * (attempt + 1))
                     continue
                 return None
         return None
@@ -95,13 +85,10 @@ class DailyStockAnalyzer:
         return all_stocks[['代码', '名称', '最新价', '涨跌幅']]
     
     def check_small_yang_pattern(self, df, min_days=3):
-        """
-        检查连续小阳线形态
-        """
+        """检查连续小阳线"""
         if df is None or len(df) < 10:
             return False, 0
         
-        # 计算小阳线
         df = df.copy()
         df['is_yang'] = (df['收盘'] > df['开盘']).astype(int)
         df['pct_change'] = (df['收盘'] - df['开盘']) / df['开盘'] * 100
@@ -111,7 +98,6 @@ class DailyStockAnalyzer:
             (df['pct_change'] <= 3.0)
         ).astype(int)
         
-        # 计算连续天数
         consecutive = df['small_yang'].rolling(min_days).sum().iloc[-1]
         
         return consecutive >= min_days, int(consecutive)
@@ -119,25 +105,21 @@ class DailyStockAnalyzer:
     def analyze_single_stock(self, code, name):
         """分析单只股票"""
         try:
-            # 使用安全 API 调用
             df = self.safe_api_call(ak.stock_zh_a_hist, symbol=code, period="daily", adjust="qfq")
             if df is None or len(df) < 10:
                 return None
             
             recent = df.head(10)
             
-            # 检查连续小阳线
             is_pattern, consecutive_days = self.check_small_yang_pattern(recent)
             
             if not is_pattern:
                 return None
             
-            # 计算技术指标
             latest = recent.iloc[0]
             ma5 = recent['收盘'].head(5).mean()
             ma10 = recent['收盘'].mean()
             
-            # 情感分析（可选）
             sentiment_score = 0.5
             if self.sentiment:
                 try:
@@ -162,21 +144,13 @@ class DailyStockAnalyzer:
             }
             
         except Exception as e:
-            print(f"分析 {code} 失败：{e}")
             return None
     
     def run_daily_analysis(self, market='all', top_n=20, max_stocks=None):
-        """
-        执行每日分析
-        
-        Args:
-            market: 市场范围 ('all', 'kcb', 'cyb')
-            top_n: 返回前 N 只股票
-            max_stocks: 最多分析多少只股票（用于测试）
-        """
-        print("="*60)
+        """执行每日分析"""
+        print("=" * 60)
         print(f"每日股票分析 - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        print("="*60)
+        print("=" * 60)
         
         # 获取股票列表
         stock_list = self.get_stock_list(market)
@@ -185,20 +159,18 @@ class DailyStockAnalyzer:
             print("未找到股票数据")
             return []
         
-        # 限制分析数量（用于测试）
+        # 限制分析数量
         if max_stocks and max_stocks < len(stock_list):
             stock_list = stock_list.head(max_stocks)
             print(f"限制分析数量：{max_stocks} 只股票")
         
-        # 分析每只股票
         print(f"\n开始分析 {len(stock_list)} 只股票...")
         results = []
         success_count = 0
         fail_count = 0
         
         for i, row in stock_list.iterrows():
-            # 每 50 只打印一次进度
-            if i % 50 == 0:
+            if i % 10 == 0:
                 print(f"进度：{i}/{len(stock_list)} | 成功：{success_count} | 失败：{fail_count}")
             
             result = self.analyze_single_stock(row['代码'], row['名称'])
@@ -209,10 +181,8 @@ class DailyStockAnalyzer:
             else:
                 fail_count += 1
         
-        # 最终统计
         print(f"\n分析完成：成功 {success_count} | 失败 {fail_count} | 成功率 {success_count/len(stock_list)*100:.1f}%")
         
-        # 排序
         results = sorted(results, key=lambda x: x['consecutive_days'], reverse=True)
         results = results[:top_n]
         
@@ -223,7 +193,7 @@ class DailyStockAnalyzer:
         return results
     
     def save_to_csv(self, filepath='output/daily_analysis.csv'):
-        """保存结果到 CSV"""
+        """保存到 CSV"""
         if not self.results:
             print("没有结果可保存")
             return
@@ -233,7 +203,7 @@ class DailyStockAnalyzer:
         print(f"结果已保存到 {filepath}")
     
     def save_to_json(self, filepath='output/daily_analysis.json'):
-        """保存结果到 JSON"""
+        """保存到 JSON"""
         if not self.results:
             return
         
@@ -253,7 +223,6 @@ class DailyStockAnalyzer:
         
         import requests
         
-        # 读取 Notion API Key
         api_key = os.environ.get('NOTION_API_KEY')
         if not api_key:
             try:
@@ -264,10 +233,8 @@ class DailyStockAnalyzer:
                 return
         
         if not page_id:
-            # 使用之前创建的页面
             page_id = '346ac5f8c03d810c9622f69d88d4bf0e'
         
-        # 创建内容
         content = []
         for i, stock in enumerate(self.results[:10], 1):
             content.append({
@@ -283,7 +250,6 @@ class DailyStockAnalyzer:
                 }
             })
         
-        # 推送到 Notion
         try:
             response = requests.post(
                 f"https://api.notion.com/v1/blocks/{page_id}/children",
@@ -303,7 +269,7 @@ class DailyStockAnalyzer:
             print(f"Notion 推送异常：{e}")
     
     def generate_report(self, output_file='output/daily_report.md'):
-        """生成 Markdown 报告"""
+        """生成报告"""
         if not self.results:
             return
         
@@ -313,13 +279,13 @@ class DailyStockAnalyzer:
 
 ## 筛选条件
 - 市场：科创板 + 创业板
-- 形态：连续小阳线（≥3 天）
-- 单日涨幅：0.5% - 3%
+- 形态：连续小阳线（涨幅 0.5%-3%）
+- 最少天数：3 天
 
-## 选股结果
+## 分析结果
 
-| 排名 | 代码 | 名称 | 连续天数 | 最新价 | 涨跌幅 | MA5 | MA10 | 情绪分 |
-|------|------|------|----------|--------|--------|-----|------|--------|
+| 序号 | 代码 | 名称 | 连续天数 | 最新价 | 涨跌幅 | MA5 | MA10 | 情绪分 |
+|------|------|------|----------|--------|-----|------|--------|
 """
         
         for i, stock in enumerate(self.results, 1):
@@ -328,7 +294,7 @@ class DailyStockAnalyzer:
         report += f"""
 ## 说明
 - **连续天数**: 符合连续小阳线形态的天数
-- **情绪分**: 基于新闻和股吧的情感分析得分（0-1，越高越正面）
+- **情绪分**: 基于关键词的情感分析得分（0-1，越高越正面）
 - **MA5/MA10**: 5 日/10 日均线
 
 ---
@@ -345,31 +311,34 @@ def main():
     """主函数"""
     print("启动每日股票分析...\n")
     
-    # 初始化分析器
     analyzer = DailyStockAnalyzer()
     
-    # 获取参数（环境变量）
+    # 获取参数
     max_stocks = os.environ.get('MAX_STOCKS')
+    test_mode = os.environ.get('TEST_MODE')
+    
     if max_stocks:
         max_stocks = int(max_stocks)
-        print(f"测试模式：限制分析 {max_stocks} 只股票")
+        print(f"限制分析数量：{max_stocks} 只股票")
     else:
         max_stocks = None
     
-    # 执行分析
-    results = analyzer.run_daily_analysis(market='all', top_n=20, max_stocks=max_stocks)
+    if test_mode:
+        print("⚠️ 测试模式：使用模拟数据")
+        analyzer.results = [
+            {'code': '688001', 'name': '华海清科', 'consecutive_days': 3, 'latest_price': 180.5, 'change_pct': 2.3, 'ma5': 175.2, 'ma10': 172.8, 'sentiment_score': 0.75},
+            {'code': '300059', 'name': '东方财富', 'consecutive_days': 4, 'latest_price': 15.2, 'change_pct': 1.8, 'ma5': 14.8, 'ma10': 14.1, 'sentiment_score': 0.65}
+        ]
+        print(f"生成模拟数据：{len(analyzer.results)} 只股票")
+    else:
+        results = analyzer.run_daily_analysis(market='all', top_n=20, max_stocks=max_stocks)
+        analyzer.results = results
     
-    if len(results) > 0:
-        # 保存结果
+    if len(analyzer.results) > 0:
         analyzer.save_to_csv()
         analyzer.save_to_json()
-        
-        # 生成报告
         analyzer.generate_report()
-        
-        # 推送到 Notion
         analyzer.push_to_notion()
-        
         print("\n✅ 每日分析完成！")
     else:
         print("\n⚠️ 未找到符合条件的股票")
