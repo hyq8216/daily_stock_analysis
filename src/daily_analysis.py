@@ -126,16 +126,16 @@ class DailyStockAnalyzer:
             # 获取当日市场数据
             today_data = ak.stock_zh_a_spot_em()
             
-            # 扩大筛选范围
+            # 使用之前成功过的筛选条件
             potential_stocks = today_data[
-                (today_data['最新价'] > 1) &       
-                (today_data['最新价'] < 300) &     
-                (today_data['成交量'] > 200000) &  
-                (~today_data['代码'].str.startswith(('8')))  # 排除北交所
+                (today_data['成交量'] > 1000000) &  # 成交量大于100万股
+                (today_data['涨跌幅'] > 0) &       # 涨幅为正
+                (today_data['涨跌幅'] <= 5) &      # 涨幅不超过5%（符合小阳线特征）
+                (~today_data['代码'].str.startswith(('000', '001', '002', '300', '688', '689')))  # 排除特殊板块
             ]
             
-            # 按成交量排序，取前200只
-            potential_stocks = potential_stocks.sort_values('成交量', ascending=False).head(200)[['代码', '名称']].dropna()
+            # 取前200只
+            potential_stocks = potential_stocks.head(200)[['代码', '名称']].dropna()
             
             print(f"筛选出 {len(potential_stocks)} 只潜力股票进行分析")
             all_stocks.extend([(row['代码'], row['名称']) for _, row in potential_stocks.iterrows()])
