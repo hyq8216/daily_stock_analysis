@@ -111,8 +111,8 @@ class DailyStockAnalyzer:
                 (~all_data['代码'].str.startswith(('8', '4')))
             ]
             
-            # 取前300只
-            stocks = filtered.head(300)[['代码', '名称']].dropna()
+            # 取前100只
+            stocks = filtered.head(100)[['代码', '名称']].dropna()
             
             print(f"选取 {len(stocks)} 只股票进行分析")
             all_stocks.extend([(row['代码'], row['名称']) for _, row in stocks.iterrows()])
