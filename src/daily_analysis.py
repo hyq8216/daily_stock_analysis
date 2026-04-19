@@ -55,8 +55,8 @@ class DailyStockAnalyzer:
                     return None
         return None
     
-    def check_small_yang_pattern(self, df, min_days=2, max_change_pct=5.0):
-        """检查连续小阳线模式 - 使用之前成功的条件"""
+    def check_small_yang_pattern(self, df, min_days=1, max_change_pct=8.0):
+        """检查连续小阳线模式 - 更宽松的条件"""
         if df is None or len(df) < min_days:
             return False, 0
         
@@ -66,7 +66,7 @@ class DailyStockAnalyzer:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # 检查是否为小阳线
+        # 检查是否为小阳线 - 更宽松：涨幅可达8%
         df['small_yang'] = (
             (df['收盘'] > df['开盘']) &
             ((df['收盘'] - df['开盘']) / df['开盘'] <= max_change_pct/100) &
