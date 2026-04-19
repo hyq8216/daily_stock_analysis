@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-每日股票分析脚本 - 宽松版
+每日股票分析脚本 - 精准版
 功能：
-1. 筛选连续小阳线股票（更宽松条件）
+1. 筛选连续小阳线股票
 2. 技术面分析
 3. 情感分析（新闻/股吧）
 4. 生成分析报告
@@ -45,29 +45,29 @@ class DailyStockAnalyzer:
         self.fetcher = DataFetcher(tushare_token) if DataFetcher else None
         self.sentiment = SentimentAnalyzer() if SentimentAnalyzer else None
         self.results = []
-        # 优化参数 - 更快的设置
-        self.request_delay = 0.1  # 减少延迟
+        # 优化参数 - 最快的设置
+        self.request_delay = 0.05  # 极小延迟
         self.max_retries = 1  # 减少重试次数
         print(f"⚠️ transformers 库未安装，情感分析功能不可用")
     
     def safe_api_call(self, func, *args, **kwargs):
-        """快速安全 API 调用"""
+        """最快安全 API 调用"""
         for attempt in range(self.max_retries + 1):
             try:
-                # 降低延迟以提高速度
+                # 极小延迟以提高速度
                 time.sleep(self.request_delay)
                 result = func(*args, **kwargs)
                 return result
             except Exception as e:
                 if attempt < self.max_retries:
-                    time.sleep(0.5)  # 较短的重试延迟
+                    time.sleep(0.2)  # 极短的重试延迟
                     continue
                 else:
                     return None
         return None
     
-    def check_small_yang_pattern(self, df, min_days=1, max_change_pct=8.0, min_change_pct=0.1):
-        """检查连续小阳线模式 - 更宽松的条件"""
+    def check_small_yang_pattern(self, df, min_days=1, max_change_pct=5.0, min_change_pct=0.1):
+        """检查连续小阳线模式 - 灵活条件"""
         if df is None or len(df) < min_days:
             return False, 0
         
@@ -81,7 +81,7 @@ class DailyStockAnalyzer:
         # 检查是否为阳线（涨幅在一定范围内）
         df['small_yang'] = (
             (df['收盘'] > df['开盘']) &  # 阳线
-            ((df['收盘'] - df['开盘']) / df['开盘'] <= max_change_pct/100) &  # 涨幅<=8%
+            ((df['收盘'] - df['开盘']) / df['开盘'] <= max_change_pct/100) &  # 涨幅<=5%
             ((df['收盘'] - df['开盘']) / df['开盘'] >= min_change_pct/100)  # 涨幅>=0.1%
         )
         
@@ -93,20 +93,20 @@ class DailyStockAnalyzer:
         """分析单只股票"""
         try:
             df = self.safe_api_call(ak.stock_zh_a_hist, symbol=code, period="daily", adjust="qfq")
-            if df is None or len(df) < 10:
+            if df is None or len(df) < 5:  # 只要5天数据
                 return None
             
-            recent = df.head(10)
+            recent = df.head(5)  # 只分析最近5天
             
-            # 使用更宽松的条件：连续1天，涨幅0.1%-8%
-            is_pattern, consecutive_days = self.check_small_yang_pattern(recent, min_days=1, max_change_pct=8.0, min_change_pct=0.1)
+            # 使用最灵活的条件：连续1天，涨幅0.1%-5%
+            is_pattern, consecutive_days = self.check_small_yang_pattern(recent, min_days=1, max_change_pct=5.0, min_change_pct=0.1)
             
             if not is_pattern:
                 return None
             
             latest = recent.iloc[0]
-            ma5 = recent['收盘'].head(5).mean()
-            ma10 = recent['收盘'].mean()
+            ma3 = recent['收盘'].head(3).mean() if len(recent) >= 3 else recent['收盘'].mean()
+            ma5 = recent['收盘'].mean()
             
             sentiment_score = 0.5
             if self.sentiment:
@@ -123,8 +123,8 @@ class DailyStockAnalyzer:
                 'consecutive_days': consecutive_days,
                 'latest_price': latest['收盘'],
                 'change_pct': latest['涨跌幅'] if '涨跌幅' in latest else 0,
+                'ma3': round(ma3, 2),
                 'ma5': round(ma5, 2),
-                'ma10': round(ma10, 2),
                 'price_ma5_ratio': round(latest['收盘'] / ma5, 3),
                 'sentiment_score': round(sentiment_score, 2),
                 'volume': latest['成交量'] if '成交量' in latest else 0,
@@ -135,53 +135,48 @@ class DailyStockAnalyzer:
             return None
     
     def get_stock_list(self, market='all'):
-        """获取股票列表 - 包含更多股票"""
+        """获取股票列表 - 专注特定概念板块"""
         print(f"获取 {market} 股票列表...")
         
         all_stocks = []
         
         try:
-            # 获取当日市场数据
+            # 获取当日数据
             today_data = ak.stock_zh_a_spot_em()
             
-            # 筛选有一定交易量的股票（不仅仅是涨跌幅限制内的）
-            active_stocks = today_data[
-                (today_data['成交量'] > 500000) &  # 成交量大于50万股
-                (today_data['最新价'] > 1) &       # 价格大于1元（排除极低价股）
-                (today_data['最新价'] < 200) &     # 价格小于200元（排除超高股价）
+            # 筛选近期可能符合条件的股票
+            # 选择价格在合理范围，有一定成交量的股票
+            potential_stocks = today_data[
+                (today_data['最新价'] > 5) &        # 价格>5元
+                (today_data['最新价'] < 50) &      # 价格<50元
+                (today_data['成交量'] > 500000) &  # 成交量>50万股
+                (today_data['涨跌幅'] >= 0) &      # 涨幅非负
+                (today_data['涨跌幅'] <= 5) &      # 涨幅<=5%
                 (~today_data['代码'].str.startswith(('688', '300', '8')))  # 排除科创板、创业板、北交所
             ]
             
-            # 只取前200只活跃股票进行分析
-            active_stocks = active_stocks.head(200)[['代码', '名称']].dropna()
+            # 按成交量排序，取前100只最有活力的股票
+            potential_stocks = potential_stocks.sort_values('成交量', ascending=False).head(100)[['代码', '名称']].dropna()
             
-            print(f"筛选出 {len(active_stocks)} 只活跃股票进行分析")
-            all_stocks.extend([(row['代码'], row['名称']) for _, row in active_stocks.iterrows()])
+            print(f"筛选出 {len(potential_stocks)} 只潜力股票进行分析")
+            all_stocks.extend([(row['代码'], row['名称']) for _, row in potential_stocks.iterrows()])
         
         except Exception as e:
-            print(f"获取活跃股票失败，使用全量数据: {e}")
-            # 如果失败，使用原始方法
+            print(f"获取潜力股票失败，使用全量数据: {e}")
+            # 如果失败，使用基本的板块数据
             try:
-                if market == 'kcb' or market == 'all':
-                    kcb = ak.stock_sh_a_spot_em()
-                    kcb = kcb[kcb['代码'].str.startswith('688')]
-                    print(f"  科创板: {len(kcb)} 只")
-                    all_stocks.extend([(row['代码'], row['名称']) for _, row in kcb.iterrows()])
+                # 获取主板活跃股票
+                zxb = ak.stock_zh_a_spot_em()
+                # 过滤活跃股票
+                active_stocks = zxb[
+                    (zxb['最新价'] > 5) &
+                    (zxb['最新价'] < 100) &
+                    (zxb['成交量'] > 1000000) &
+                    (~zxb['代码'].str.startswith(('000', '001', '002', '300', '688', '689')))
+                ].head(100)[['代码', '名称']].dropna()
                 
-                if market == 'cyb' or market == 'all':
-                    cyb = ak.stock_sz_a_spot_em()
-                    cyb = cyb[cyb['代码'].str.startswith('300')]
-                    print(f"  创业板: {len(cyb)} 只")
-                    all_stocks.extend([(row['代码'], row['名称']) for _, row in cyb.iterrows()])
-                
-                if market == 'all':
-                    zxb = ak.stock_zh_a_spot_em()
-                    # 过滤掉科创板和创业板
-                    main_board = zxb[
-                        ~(zxb['代码'].str.startswith(('000', '001', '002', '300', '688', '689')))
-                    ]
-                    print(f"  主板: {len(main_board)} 只")
-                    all_stocks.extend([(row['代码'], row['名称']) for _, row in main_board.iterrows()])
+                print(f"获取 {len(active_stocks)} 只活跃股票")
+                all_stocks.extend([(row['代码'], row['名称']) for _, row in active_stocks.iterrows()])
             except Exception as e:
                 print(f"获取股票列表失败: {e}")
                 return []
@@ -221,8 +216,8 @@ class DailyStockAnalyzer:
             else:
                 fail_count += 1
             
-            # 显示进度（每50只股票显示一次）
-            if (i + 1) % 50 == 0 or i == len(stock_list) - 1:
+            # 显示进度（每20只股票显示一次）
+            if (i + 1) % 20 == 0 or i == len(stock_list) - 1:
                 elapsed_time = (datetime.now() - datetime.strptime(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), '%Y-%m-%d %H:%M:%S').replace(second=0, microsecond=0)).total_seconds()
                 print(f"进度：{i+1}/{len(stock_list)} | 成功：{success_count} | 失败：{fail_count} | 用时：{elapsed_time:.0f}s")
         
@@ -270,7 +265,7 @@ class DailyStockAnalyzer:
 
 **筛选条件**: 
 - 连续小阳线 ≥ 1 天
-- 小阳线定义：当日涨幅在 0.1% ~ 8% 的阳线
+- 小阳线定义：当日涨幅在 0.1% ~ 5% 的阳线
 
 ---
 *报告由 daily_stock_analysis 自动生成*
@@ -292,7 +287,7 @@ class DailyStockAnalyzer:
 {chr(10).join(report_rows)}
 
 ### 分析说明
-- **连续小阳线**: 连续 1 天或以上的涨幅在 0.1%~8% 的阳线
+- **连续小阳线**: 连续 1 天或以上的涨幅在 0.1%~5% 的阳线
 - **价格/MA5**: 当前价格与5日均线的比率，反映短期趋势强度
 
 ---
@@ -323,13 +318,13 @@ def main():
         print(f"限制分析数量：{max_stocks} 只股票")
     else:
         max_stocks = None
-        print("分析活跃股票（约200只）")
+        print("分析潜力股票（约100只）")
     
     if test_mode:
         print("⚠️ 测试模式：使用模拟数据")
         analyzer.results = [
-            {'code': '688001', 'name': '华海清科', 'consecutive_days': 3, 'latest_price': 180.5, 'change_pct': 2.3, 'ma5': 175.2, 'ma10': 172.8, 'sentiment_score': 0.75},
-            {'code': '300059', 'name': '东方财富', 'consecutive_days': 4, 'latest_price': 15.2, 'change_pct': 1.8, 'ma5': 14.8, 'ma10': 14.1, 'sentiment_score': 0.65}
+            {'code': '688001', 'name': '华海清科', 'consecutive_days': 3, 'latest_price': 180.5, 'change_pct': 2.3, 'ma3': 178.2, 'ma5': 175.2, 'sentiment_score': 0.75},
+            {'code': '300059', 'name': '东方财富', 'consecutive_days': 4, 'latest_price': 15.2, 'change_pct': 1.8, 'ma3': 15.0, 'ma5': 14.8, 'sentiment_score': 0.65}
         ]
         print(f"生成模拟数据：{len(analyzer.results)} 只股票")
     else:
