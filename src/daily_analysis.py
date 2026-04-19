@@ -46,8 +46,8 @@ class DailyStockAnalyzer:
         self.fetcher = DataFetcher(tushare_token) if DataFetcher else None
         self.sentiment = SentimentAnalyzer() if SentimentAnalyzer else None
         self.results = []
-        self.request_delay = 0.2  # 每次请求延迟 0.2 秒
-        self.max_retries = 2  # 最大重试次数
+        self.request_delay = 0.5  # 每次请求延迟 0.5 秒（优化）
+        self.max_retries = 1  # 最大重试次数（优化）
     
     def safe_api_call(self, func, *args, **kwargs):
         """带重试和延迟的安全 API 调用"""
