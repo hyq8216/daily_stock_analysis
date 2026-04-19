@@ -436,13 +436,14 @@ def main():
     analyzer = DailyStockAnalyzer(tushare_token=tushare_token)
     
     # 获取参数
-    max_stocks = int(os.environ.get('MAX_STOCKS', '50'))
+    max_stocks = int(os.environ.get('MAX_STOCKS', '0'))
     test_mode = os.environ.get('TEST_MODE', 'false') == 'true'
     
-    if max_stocks:
+    if max_stocks > 0:
         print(f"限制分析数量：{max_stocks} 只股票")
     else:
         max_stocks = None
+        print("分析全部股票（无数量限制）")
     
     if test_mode:
         print("⚠️ 测试模式：使用模拟数据")
