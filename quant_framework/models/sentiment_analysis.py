@@ -6,10 +6,17 @@ NLP 情感分析模块
 
 import pandas as pd
 import numpy as np
-from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
-import torch
 import akshare as ak
 from datetime import datetime, timedelta
+
+# 可选依赖
+try:
+    from transformers import pipeline
+    import torch
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+    print("⚠️ transformers 库未安装，情感分析功能不可用")
 
 
 class SentimentAnalyzer:
@@ -18,9 +25,18 @@ class SentimentAnalyzer:
         初始化情感分析器
         model_name: 预训练模型名称
         """
-        self.device = 0 if torch.cuda.is_available() else -1
+        self.analyzer = None
+        self.device = -1
         
-        # 中文情感分析模型
+        # 检查是否可用 transformers
+        if not TRANSFORMERS_AVAILABLE:
+            print("⚠️ transformers 库不可用，使用关键词情感分析")
+            self.positive_words = ['利好', '增长', '上涨', '突破', '创新高', '盈利', '超预期', '重组', '并购']
+            self.negative_words = ['利空', '下跌', '亏损', '下滑', '风险', '违规', '处罚', '诉讼', '退市']
+            return
+        
+        # 尝试加载预训练模型
+        self.device = 0 if torch.cuda.is_available() else -1
         print(f"加载情感分析模型：{model_name}...")
         try:
             self.analyzer = pipeline(
@@ -28,10 +44,9 @@ class SentimentAnalyzer:
                 model=model_name,
                 device=self.device
             )
-        except:
-            # 备用方案：使用简单的关键词情感分析
-            print("预训练模型加载失败，使用关键词分析...")
-            self.analyzer = None
+            print("✅ 情感分析模型加载成功")
+        except Exception as e:
+            print(f"⚠️ 预训练模型加载失败 ({e})，使用关键词分析...")
             self.positive_words = ['利好', '增长', '上涨', '突破', '创新高', '盈利', '超预期', '重组', '并购']
             self.negative_words = ['利空', '下跌', '亏损', '下滑', '风险', '违规', '处罚', '诉讼', '退市']
     
